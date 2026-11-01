@@ -16,6 +16,11 @@ class InvoiceItem
 {
     public $quantity = 0;
 
+    // Quote task: independent, user-entered working hours. Pricing still uses quantity=1.
+    public $task_hours = 0;
+
+    public $manual_total = false;
+
     public $net_cost = 0;
 
     public $cost = 0;
@@ -82,6 +87,8 @@ class InvoiceItem
         'tax_id' => 'string',
         'type_id' => 'string',
         'quantity' => 'float',
+        'task_hours' => 'float',
+        'manual_total' => 'bool',
         'cost' => 'float',
         'product_cost' => 'float',
         'product_key' => 'string',

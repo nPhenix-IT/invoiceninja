@@ -310,6 +310,12 @@ trait MakesInvoiceValues
             if ($item->quantity > 0 || $item->cost > 0) {
                 $data[$key][$table_type . '.quantity'] = Number::formatValueNoTrailingZeroes($item->quantity, $entity);
 
+                // Manually-priced quote tasks store hours independently of their billing quantity.
+                if ($table_type == '$task') {
+                    $hours = ! empty($item->manual_total) ? ($item->task_hours ?? 0) : $item->quantity;
+                    $data[$key]['$task.hours'] = Number::formatValueNoTrailingZeroes($hours, $entity);
+                }
+
                 $data[$key][$table_type . '.unit_cost'] = Number::formatMoneyNoRounding($item->cost, $entity);
 
                 $data[$key][$table_type . '.cost'] = Number::formatMoney($item->cost, $entity);

@@ -1,0 +1,171 @@
+diff --git a/src/common/interfaces/invoice-item.ts b/src/common/interfaces/invoice-item.ts
+--- a/src/common/interfaces/invoice-item.ts
++++ b/src/common/interfaces/invoice-item.ts
+@@ -21,6 +21,9 @@
+   _id?: string;
+   quantity: number;
+   cost: number;
++  // Quote task amount entered independently from work hours.
++  manual_total?: boolean;
++  task_hours?: number;
+   product_key: string;
+   notes: string;
+   discount: number;
+diff --git a/src/pages/quotes/common/hooks.tsx b/src/pages/quotes/common/hooks.tsx
+--- a/src/pages/quotes/common/hooks.tsx
++++ b/src/pages/quotes/common/hooks.tsx
+@@ -224,7 +224,14 @@
+           ...current,
+           line_items: [
+             ...current.line_items,
++            {
++              ...blankLineItem(),
++              type_id: typeId,
++              quantity: 1,
++              ...(typeId === InvoiceItemType.Task
++                ? { manual_total: true, task_hours: 0 }
++                : {}),
++            },
+-            { ...blankLineItem(), type_id: typeId, quantity: 1 },
+           ],
+         }
+     );
+diff --git a/src/pages/quotes/create/components/CreatePage.tsx b/src/pages/quotes/create/components/CreatePage.tsx
+--- a/src/pages/quotes/create/components/CreatePage.tsx
++++ b/src/pages/quotes/create/components/CreatePage.tsx
+@@ -54,6 +54,12 @@
+   const [searchParams] = useSearchParams();
+ 
+   const taskColumns = useTaskColumns();
++  const manualTaskColumns = [
++    ...taskColumns.filter(
++      (column) => !['$task.rate', '$task.cost', '$task.line_total'].includes(column)
++    ),
++    '$task.line_total',
++  ];
+   const productColumns = useProductColumns();
+   const productQuoteColumns = useProductQuoteColumns();
+   const { defaultTabIndex, handleTabChange } = useDefaultTabIndex(quote);
+@@ -139,7 +145,8 @@
+                   items={quote.line_items.filter(
+                     (item) => item.type_id === InvoiceItemType.Task
+                   )}
++                  columns={manualTaskColumns}
++                  manualTaskAmount
+-                  columns={taskColumns}
+                   relationType="client_id"
+                   onLineItemChange={handleLineItemChange}
+                   onSort={(lineItems) => handleChange('line_items', lineItems)}
+diff --git a/src/pages/quotes/edit/Edit.tsx b/src/pages/quotes/edit/Edit.tsx
+--- a/src/pages/quotes/edit/Edit.tsx
++++ b/src/pages/quotes/edit/Edit.tsx
+@@ -58,6 +58,12 @@
+ 
+   const colors = useColorScheme();
+   const taskColumns = useTaskColumns();
++  const manualTaskColumns = [
++    ...taskColumns.filter(
++      (column) => !['$task.rate', '$task.cost', '$task.line_total'].includes(column)
++    ),
++    '$task.line_total',
++  ];
+   const productColumns = useProductColumns();
+   const productQuoteColumns = useProductQuoteColumns();
+   const { defaultTabIndex } = useDefaultTabIndex(quote);
+@@ -187,7 +193,8 @@
+                   items={quote.line_items.filter(
+                     (item) => item.type_id === InvoiceItemType.Task
+                   )}
++                  columns={manualTaskColumns}
++                  manualTaskAmount
+-                  columns={taskColumns}
+                   relationType="client_id"
+                   onLineItemChange={handleLineItemChange}
+                   onSort={(lineItems) => handleChange('line_items', lineItems)}
+diff --git a/src/pages/invoices/common/components/ProductsTable.tsx b/src/pages/invoices/common/components/ProductsTable.tsx
+--- a/src/pages/invoices/common/components/ProductsTable.tsx
++++ b/src/pages/invoices/common/components/ProductsTable.tsx
+@@ -49,6 +49,7 @@
+   onDeleteRowClick: (index: number) => unknown;
+   onCreateItemClick: () => unknown;
+   shouldCreateInitialLineItem?: boolean;
++  manualTaskAmount?: boolean;
+ }
+ 
+ export function ProductsTable(props: Props) {
+@@ -71,6 +72,7 @@
+     relationType,
+     createItem: props.onCreateItemClick,
+     deleteLineItem: props.onDeleteRowClick,
++    manualTaskAmount: props.manualTaskAmount,
+   });
+ 
+   const onDragEnd = useHandleSortingRows({
+diff --git a/src/pages/invoices/common/components/TasksTabLabel.tsx b/src/pages/invoices/common/components/TasksTabLabel.tsx
+--- a/src/pages/invoices/common/components/TasksTabLabel.tsx
++++ b/src/pages/invoices/common/components/TasksTabLabel.tsx
+@@ -27,7 +27,7 @@
+       lineItems
+         .filter((item) => item.type_id === InvoiceItemType.Task)
+         .reduce((acc, item) => {
++          return acc + (item.manual_total ? item.task_hours ?? 0 : item.quantity);
+-          return acc + item.quantity;
+         }, 0),
+     [lineItems]
+   );
+diff --git a/src/pages/invoices/common/hooks/useResolveInputField.tsx b/src/pages/invoices/common/hooks/useResolveInputField.tsx
+--- a/src/pages/invoices/common/hooks/useResolveInputField.tsx
++++ b/src/pages/invoices/common/hooks/useResolveInputField.tsx
+@@ -82,6 +82,7 @@
+   ) => unknown;
+   createItem: () => unknown;
+   deleteLineItem: (index: number) => unknown;
++  manualTaskAmount?: boolean;
+ }
+ 
+ export const isLineItemEmpty = (lineItem: InvoiceItem) => {
+@@ -92,6 +93,7 @@
+       property !== '_id' &&
+       property !== 'type_id' &&
+       property !== 'is_amount_discount' &&
++      property !== 'manual_total' &&
+       lineItem[property as keyof InvoiceItem]
+     );
+   });
+@@ -397,6 +399,36 @@
+   return (key: string, index: number) => {
+     const property = resolveProperty(key);
+ 
++    if (
++      props.manualTaskAmount &&
++      props.type === 'task' &&
++      (key === '$task.hours' || key === '$task.line_total')
++    ) {
++      const item = resource.line_items[index];
++      const hours = item.manual_total ? item.task_hours ?? 0 : item.quantity;
++      const amount = item.manual_total ? item.cost : item.cost * item.quantity;
++      const isHours = key === '$task.hours';
++
++      return (
++        <NumberInputField
++          id={isHours ? 'task_hours' : 'task_total_amount'}
++          precision={isHours ? 2 : (inputCurrencySeparators?.precision ?? 2)}
++          value={isHours ? hours : amount}
++          onValueChange={(value: string) => {
++            const entered = parseFloat(value);
++            if (!Number.isFinite(entered) || entered < 0) return;
++            props.onLineItemChange(index, {
++              ...item,
++              quantity: 1,
++              cost: isHours ? amount : entered,
++              task_hours: isHours ? entered : hours,
++              manual_total: true,
++            });
++          }}
++        />
++      );
++    }
++
+     if (property === 'net_cost') {
+       return null;
+     }

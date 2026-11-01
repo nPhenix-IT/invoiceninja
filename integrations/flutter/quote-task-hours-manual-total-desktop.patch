@@ -1,0 +1,195 @@
+diff --git a/lib/ui/features/billing_shared/line_item_editor/line_item_table_desktop.dart b/lib/ui/features/billing_shared/line_item_editor/line_item_table_desktop.dart
+--- a/lib/ui/features/billing_shared/line_item_editor/line_item_table_desktop.dart
++++ b/lib/ui/features/billing_shared/line_item_editor/line_item_table_desktop.dart
+@@ -93,7 +93,7 @@
+   if (config.customFields.isEmpty) return 0;
+   // Item 3 + Description 3 + Unit Cost + Quantity + Line Total, then the
+   // optional discount and tax columns — the flexes `_Row` lays out.
++  final flexUnits = 9 - (config.taskManualTotal ? 1 : 0) + (config.showDiscount ? 1 : 0) + config.taxColumnCount;
+-  final flexUnits = 9 + (config.showDiscount ? 1 : 0) + config.taxColumnCount;
+   var width =
+       InSpacing.lg(context) * 2 +
+       _kDragColWidth +
+@@ -322,11 +322,11 @@
+       _rows.removeLast().dispose();
+     }
+     for (var i = 0; i < items.length; i++) {
++      _rows[i].syncFrom(items[i], manualTaskTotal: widget.config.taskManualTotal);
+-      _rows[i].syncFrom(items[i]);
+     }
+     // Trailing ghost row tracks a fresh empty item so its controllers
+     // start blank.
++    _rows.last.syncFrom(widget.config.taskManualTotal ? widget.newItemFactory() : emptyLineItem(), manualTaskTotal: widget.config.taskManualTotal);
+-    _rows.last.syncFrom(emptyLineItem());
+   }
+ 
+   /// Flush every row's debounced text onto the parent, and return the list
+@@ -360,7 +360,7 @@
+     );
+     final next = <LineItem>[];
+     for (var i = 0; i < base.length && i < _rows.length; i++) {
++      next.add(_rows[i].buildItem(base[i], useComma: _useComma, manualTaskTotal: widget.config.taskManualTotal));
+-      next.add(_rows[i].buildItem(base[i], useComma: _useComma));
+     }
+     // The host's factory, not `emptyLineItem()`: in the Tasks tab it makes an
+     // hourly (`type_id` 2) row, and a ghost committed from here as `standard`
+@@ -370,6 +370,7 @@
+       final ghost = _rows.last.buildItem(
+         widget.newItemFactory(),
+         useComma: _useComma,
++        manualTaskTotal: widget.config.taskManualTotal,
+       );
+       if (!ghost.isBlank) next.add(ghost);
+     }
+@@ -461,7 +462,7 @@
+     // Also pushes the pending edit onto the draft, so the document keeps it.
+     final flushed = _flushAll();
+     if (index >= flushed.length) return;
++    handler(_rows[index].buildItem(flushed[index], useComma: _useComma, manualTaskTotal: widget.config.taskManualTotal));
+-    handler(_rows[index].buildItem(flushed[index], useComma: _useComma));
+   }
+ 
+   void _clone(int index) {
+@@ -1103,7 +1104,8 @@
+                 ),
+               ),
+             ),
++          if (!config.taskManualTotal)
++            cell(label('unit_cost'), align: AlignmentDirectional.centerEnd),
+-          cell(label('unit_cost'), align: AlignmentDirectional.centerEnd),
+           cell(label('quantity'), align: AlignmentDirectional.centerEnd),
+           if (config.showDiscount)
+             cell(label('discount'), align: AlignmentDirectional.centerEnd),
+@@ -1119,7 +1121,7 @@
+                   : label('tax'),
+               align: AlignmentDirectional.centerEnd,
+             ),
++          cell(config.taskManualTotal ? context.tr('total') : label('line_total'), align: AlignmentDirectional.centerEnd),
+-          cell(label('line_total'), align: AlignmentDirectional.centerEnd),
+           const SizedBox(width: _kTrailingColWidth),
+         ],
+       ),
+@@ -1277,7 +1279,7 @@
+ 
+   /// Re-seed controllers when the parent's LineItem content changes
+   /// (e.g. the user picked a product and we filled cost / notes).
++  void syncFrom(LineItem item, {bool manualTaskTotal = false}) {
+-  void syncFrom(LineItem item) {
+     final product = item.productKey;
+     if (product != _seedProduct && !productFocus.hasFocus) {
+       this.product.text = product;
+@@ -1288,12 +1290,12 @@
+       this.notes.text = notes;
+       _seedNotes = notes;
+     }
++    final costText = _seedFor(manualTaskTotal && !item.manualTotal ? item.cost * item.quantity : item.cost);
+-    final costText = _seedFor(item.cost);
+     if (costText != _seedCost && !costFocus.hasFocus) {
+       cost.text = costText;
+       _seedCost = costText;
+     }
++    final qtyText = _seedFor(manualTaskTotal ? (item.manualTotal ? (item.taskHours ?? Decimal.zero) : item.quantity) : item.quantity);
+-    final qtyText = _seedFor(item.quantity);
+     if (qtyText != _seedQty && !quantityFocus.hasFocus) {
+       quantity.text = qtyText;
+       _seedQty = qtyText;
+@@ -1334,7 +1336,7 @@
+   /// no caller has to say which slots are text-typed. Untrimmed, unlike the
+   /// product key: a stored value with a trailing space would otherwise never
+   /// equal the item it came from, and every flush would re-dirty the document.
++  LineItem buildItem(LineItem base, {bool useComma = false, bool manualTaskTotal = false}) {
+-  LineItem buildItem(LineItem base, {bool useComma = false}) {
+     var built = base.copyWith(
+       productKey: product.text.trim(),
+       notes: notes.text,
+@@ -1343,11 +1345,16 @@
+           Decimal.zero,
+       // An hourly row's Hours cell also takes a duration (`1:30`, `90m`); a
+       // colon it can't read keeps the hours the row already had.
++      quantity: manualTaskTotal ? Decimal.one : base.typeId == LineItemType.task
+-      quantity: base.typeId == LineItemType.task
+           ? parseHoursInput(quantity.text, useCommaAsDecimalPlace: useComma) ??
+                 base.quantity
+           : parseDecimal(quantity.text, useCommaAsDecimalPlace: useComma) ??
+                 Decimal.one,
++      manualTotal: manualTaskTotal ? true : base.manualTotal,
++      taskHours: manualTaskTotal
++          ? (parseHoursInput(quantity.text, useCommaAsDecimalPlace: useComma) ??
++              (base.manualTotal ? (base.taskHours ?? Decimal.zero) : base.quantity))
++          : base.taskHours,
+       discount:
+           parseDecimal(discount.text, useCommaAsDecimalPlace: useComma) ??
+           Decimal.zero,
+@@ -1512,7 +1519,7 @@
+     final tokens = context.inTheme;
+ 
+     void commitNow() {
++      onCellCommit(row.buildItem(currentItem, useComma: useComma, manualTaskTotal: config.taskManualTotal));
+-      onCellCommit(row.buildItem(currentItem, useComma: useComma));
+     }
+ 
+     void scheduleCommit() {
+@@ -1525,7 +1532,7 @@
+     void commitCustom(int slot, String value) {
+       onCellCommit(
+         withLineItemCustomValue(
++          row.buildItem(currentItem, useComma: useComma, manualTaskTotal: config.taskManualTotal),
+-          row.buildItem(currentItem, useComma: useComma),
+           slot,
+           value,
+         ),
+@@ -1560,7 +1567,7 @@
+                     // tick and untick on an inserted blank row would otherwise
+                     // keep a line the save-time strip can't drop.
+                     final rest = withLineItemCustomValue(
++                      row.buildItem(currentItem, useComma: useComma, manualTaskTotal: config.taskManualTotal),
+-                      row.buildItem(currentItem, useComma: useComma),
+                       slot,
+                       '',
+                     );
+@@ -1623,6 +1630,19 @@
+     }
+ 
+     Widget endTotalCell() {
++      if (config.taskManualTotal) {
++        return Expanded(
++          child: Padding(
++            padding: const EdgeInsetsDirectional.only(end: _kCellPadH),
++            child: _NumericCell(
++              controller: row.cost,
++              focusNode: row.costFocus,
++              onChanged: scheduleCommit,
++              errorText: errors?['cost'],
++            ),
++          ),
++        );
++      }
+       final cost =
+           parseDecimal(row.cost.text, useCommaAsDecimalPlace: useComma) ??
+           Decimal.zero;
+@@ -1733,11 +1753,12 @@
+                 ),
+               ),
+               for (final custom in config.customFields) customCell(custom),
++              if (!config.taskManualTotal)
++                Expanded(
++                  child: Padding(
++                    padding: const EdgeInsetsDirectional.only(end: _kCellPadH),
++                    child: _NumericCell(
++                      controller: row.cost,
+-              Expanded(
+-                child: Padding(
+-                  padding: const EdgeInsetsDirectional.only(end: _kCellPadH),
+-                  child: _NumericCell(
+-                    controller: row.cost,
+                     focusNode: row.costFocus,
+                     onChanged: scheduleCommit,
+                     errorText: errors?['cost'],
+@@ -1801,6 +1822,7 @@
+                         final base = row.buildItem(
+                           currentItem,
+                           useComma: useComma,
++                          manualTaskTotal: config.taskManualTotal,
+                         );
+                         onCellCommit(switch (slot) {
+                           1 => base.copyWith(taxName1: name, taxRate1: rate),

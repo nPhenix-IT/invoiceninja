@@ -976,7 +976,13 @@ Código seguro de verificación (CSV): {$verifactu_log->status}";
                     ->filter(function ($item) {
                         return $item->type_id == '2';
                     })
-                    ->sum('quantity');
+                    ->sum(function ($item) {
+                        // Quote tasks may be billed at a manually entered total,
+                        // with hours recorded separately from the billing quantity.
+                        return ! empty($item->manual_total)
+                            ? (float) ($item->task_hours ?? 0)
+                            : (float) $item->quantity;
+                    });
     }
 
     /**
