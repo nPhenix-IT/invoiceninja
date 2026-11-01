@@ -1,0 +1,221 @@
+diff --git a/lib/data/models/api/line_item_api_model.dart b/lib/data/models/api/line_item_api_model.dart
+--- a/lib/data/models/api/line_item_api_model.dart
++++ b/lib/data/models/api/line_item_api_model.dart
+@@ -33,6 +33,8 @@
+     @Default('0') Object cost,
+     @JsonKey(name: 'product_cost') @Default('0') Object productCost,
+     @Default('1') Object quantity,
++    @JsonKey(name: 'task_hours') Object? taskHours,
++    @JsonKey(name: 'manual_total') @Default(false) bool manualTotal,
+     @JsonKey(name: 'tax_name1', fromJson: jsonScalarToStringOrEmpty)
+     @Default('')
+     String taxName1,
+diff --git a/lib/data/models/domain/billing/line_item.dart b/lib/data/models/domain/billing/line_item.dart
+--- a/lib/data/models/domain/billing/line_item.dart
++++ b/lib/data/models/domain/billing/line_item.dart
+@@ -34,6 +34,8 @@
+     required Decimal cost,
+     required Decimal productCost,
+     required Decimal quantity,
++    Decimal? taskHours,
++    @Default(false) bool manualTotal,
+     required String taxName1,
+     required String taxName2,
+     required String taxName3,
+@@ -58,6 +60,8 @@
+     cost: parseMoney(a.cost),
+     productCost: parseMoney(a.productCost),
+     quantity: _parseQuantity(a.quantity) ?? Decimal.one,
++    taskHours: a.taskHours == null ? null : parseMoney(a.taskHours),
++    manualTotal: a.manualTotal,
+     taxName1: a.taxName1,
+     taxName2: a.taxName2,
+     taxName3: a.taxName3,
+@@ -344,6 +348,8 @@
+     'cost': cost.toString(),
+     'product_cost': productCost.toString(),
+     'quantity': quantity.toString(),
++    if (manualTotal) 'manual_total': true,
++    if (manualTotal) 'task_hours': (taskHours ?? Decimal.zero).toString(),
+     'tax_name1': taxName1,
+     'tax_name2': taxName2,
+     'tax_name3': taxName3,
+diff --git a/lib/ui/features/billing_shared/line_item_editor/line_item_column_config.dart b/lib/ui/features/billing_shared/line_item_editor/line_item_column_config.dart
+--- a/lib/ui/features/billing_shared/line_item_editor/line_item_column_config.dart
++++ b/lib/ui/features/billing_shared/line_item_editor/line_item_column_config.dart
+@@ -17,6 +17,7 @@
+     this.showDiscount = false,
+     this.useTaxCategories = false,
+     this.isTaskTable = false,
++    this.taskManualTotal = false,
+   });
+ 
+   /// The company's configured custom fields for this table, in slot order —
+@@ -48,6 +49,9 @@
+   /// and the server's PDF task table use for the same three fields.
+   final bool isTaskTable;
+ 
++  /// Quote task hours and manually entered total, without Rate.
++  final bool taskManualTotal;
++
+   /// The label key to show for the column / field named [key]. A task table
+   /// swaps the three product words for their hourly counterparts; every other
+   /// key passes through. Resolve the result through `context.tr`, so a
+@@ -103,7 +107,8 @@
+       other.taxColumnCount == taxColumnCount &&
+       other.showDiscount == showDiscount &&
+       other.useTaxCategories == useTaxCategories &&
++      other.isTaskTable == isTaskTable &&
++      other.taskManualTotal == taskManualTotal;
+-      other.isTaskTable == isTaskTable;
+ 
+   @override
+   int get hashCode => Object.hash(
+@@ -112,6 +117,7 @@
+     showDiscount,
+     useTaxCategories,
+     isTaskTable,
++    taskManualTotal,
+   );
+ 
+   LineItemColumnConfig copyWith({
+@@ -120,12 +126,14 @@
+     bool? showDiscount,
+     bool? useTaxCategories,
+     bool? isTaskTable,
++    bool? taskManualTotal,
+   }) => LineItemColumnConfig(
+     customFields: customFields ?? this.customFields,
+     taxColumnCount: taxColumnCount ?? this.taxColumnCount,
+     showDiscount: showDiscount ?? this.showDiscount,
+     useTaxCategories: useTaxCategories ?? this.useTaxCategories,
+     isTaskTable: isTaskTable ?? this.isTaskTable,
++    taskManualTotal: taskManualTotal ?? this.taskManualTotal,
+   );
+ }
+ 
+diff --git a/lib/ui/features/billing_shared/edit/billing_doc_edit_layout.dart b/lib/ui/features/billing_shared/edit/billing_doc_edit_layout.dart
+--- a/lib/ui/features/billing_shared/edit/billing_doc_edit_layout.dart
++++ b/lib/ui/features/billing_shared/edit/billing_doc_edit_layout.dart
+@@ -920,6 +920,7 @@
+       onPickItems: onPickItems,
+       showStockQuantity: type.showsProductStock,
+       offerTasksTab: type.offersTasksTable,
++      quoteManualTaskTotals: type == BillingDocType.quote,
+       onCreateTaskFromLineItem: onCreateTask,
+     );
+   }
+diff --git a/lib/ui/features/billing_shared/items/billing_doc_items_tabs.dart b/lib/ui/features/billing_shared/items/billing_doc_items_tabs.dart
+--- a/lib/ui/features/billing_shared/items/billing_doc_items_tabs.dart
++++ b/lib/ui/features/billing_shared/items/billing_doc_items_tabs.dart
+@@ -1,5 +1,6 @@
+ import 'dart:async';
+ import 'dart:math' as math;
++import 'package:decimal/decimal.dart';
+ 
+ import 'package:flutter/foundation.dart';
+ import 'package:flutter/material.dart';
+@@ -67,6 +68,7 @@
+     required this.onPickItems,
+     this.showStockQuantity = false,
+     this.offerTasksTab = false,
++    this.quoteManualTaskTotals = false,
+     this.onCreateTaskFromLineItem,
+   });
+ 
+@@ -89,6 +91,7 @@
+   /// `BillingDocType.offersTasksTable`. A document that already has one shows
+   /// the tab whatever this says.
+   final bool offerTasksTab;
++  final bool quoteManualTaskTotals;
+ 
+   /// Invoice / quote hosts only — schedule a line's work as a dated task
+   /// (invoiceninja/flutter#88). Forwarded to ALL THREE tabs: an expense line is
+@@ -498,7 +501,11 @@
+   /// editor takes no new rows (`allowNewRows` in [_editor]). Its row Clone
+   /// copies an existing line rather than calling this.
+   LineItem Function() _factoryFor(_LineKind kind) => kind == _LineKind.tasks
++      ? () => widget.newItemFactory().copyWith(
++          typeId: LineItemType.task,
++          manualTotal: widget.quoteManualTaskTotals,
++          taskHours: widget.quoteManualTaskTotals ? Decimal.zero : null,
++        )
+-      ? () => widget.newItemFactory().copyWith(typeId: LineItemType.task)
+       : widget.newItemFactory;
+ 
+   Widget _editor(_LineKind kind) {
+@@ -513,7 +520,9 @@
+       // discount column, so the tax count rides that read rather than opening
+       // another subscription per editor (invoiceninja/flutter#85). The tabs'
+       // own read above is a different question — which tabs exist — asked once.
++      config: _hostConfig(isTaskTable: kind == _LineKind.tasks).copyWith(
++        taskManualTotal: widget.quoteManualTaskTotals && kind == _LineKind.tasks,
++      ),
+-      config: _hostConfig(isTaskTable: kind == _LineKind.tasks),
+       controller: _controllerFor(kind),
+       // Stock count is a product-selection affordance — only the products
+       // tab's typeahead surfaces it (and only on invoices, via the host).
+diff --git a/lib/ui/features/billing_shared/line_item_editor/line_item_edit_dialog.dart b/lib/ui/features/billing_shared/line_item_editor/line_item_edit_dialog.dart
+--- a/lib/ui/features/billing_shared/line_item_editor/line_item_edit_dialog.dart
++++ b/lib/ui/features/billing_shared/line_item_editor/line_item_edit_dialog.dart
+@@ -107,8 +107,16 @@
+     _draft = widget.initial;
+     _productKey = TextEditingController(text: _draft.productKey);
+     _notes = TextEditingController(text: _draft.notes);
++    _cost = TextEditingController(
++      text: _decimalText(widget.config.taskManualTotal && !_draft.manualTotal
++          ? _draft.cost * _draft.quantity
++          : _draft.cost),
++    );
++    _quantity = TextEditingController(
++      text: _decimalText(widget.config.taskManualTotal
++          ? (_draft.manualTotal ? (_draft.taskHours ?? Decimal.zero) : _draft.quantity)
++          : _draft.quantity),
++    );
+-    _cost = TextEditingController(text: _decimalText(_draft.cost));
+-    _quantity = TextEditingController(text: _decimalText(_draft.quantity));
+     _discount = TextEditingController(text: _decimalText(_draft.discount));
+     _taxName1 = TextEditingController(text: _draft.taxName1);
+     _taxRate1 = TextEditingController(text: _decimalText(_draft.taxRate1));
+@@ -147,9 +155,15 @@
+     productKey: _productKey.text.trim(),
+     notes: _notes.text,
+     cost: _parseOrZero(_cost),
++    manualTotal: widget.config.taskManualTotal ? true : _draft.manualTotal,
++    taskHours: widget.config.taskManualTotal
++        ? (parseHoursInput(_quantity.text, useCommaAsDecimalPlace: widget.useComma) ?? Decimal.zero)
++        : _draft.taskHours,
+     // An hourly line's Hours field also takes a duration (`1:30`, `90m`); a
+     // colon it can't read keeps the hours the line already had.
++    quantity: widget.config.taskManualTotal
++        ? Decimal.one
++        : _draft.typeId == LineItemType.task
+-    quantity: _draft.typeId == LineItemType.task
+         ? parseHoursInput(
+                 _quantity.text,
+                 useCommaAsDecimalPlace: widget.useComma,
+@@ -228,7 +242,9 @@
+                     child: TextField(
+                       controller: _cost,
+                       decoration: InputDecoration(
++                        labelText: widget.config.taskManualTotal
++                            ? context.tr('total')
++                            : label('unit_cost'),
+-                        labelText: label('unit_cost'),
+                       ),
+                       keyboardType: const TextInputType.numberWithOptions(
+                         decimal: true,
+diff --git a/lib/ui/features/billing_shared/line_item_editor/line_item_card_list_mobile.dart b/lib/ui/features/billing_shared/line_item_editor/line_item_card_list_mobile.dart
+--- a/lib/ui/features/billing_shared/line_item_editor/line_item_card_list_mobile.dart
++++ b/lib/ui/features/billing_shared/line_item_editor/line_item_card_list_mobile.dart
+@@ -393,7 +393,9 @@
+         : item.productKey.isEmpty
+         ? (summary.isEmpty ? context.tr('untitled') : summary)
+         : item.productKey;
++    final detail = config.taskManualTotal
++        ? '${context.tr('hours')}: ${item.manualTotal ? (item.taskHours ?? Decimal.zero) : item.quantity} · ${context.tr('total')}: ${fmt(item.manualTotal ? item.cost : item.gross)}'
++        : '${fmt(item.cost)} × ${item.quantity}';
+-    final detail = '${fmt(item.cost)} × ${item.quantity}';
+     // Directly under the name: the values describe the item ("Color: Red"),
+     // where `cost × qty` describes the charge. Labels stay — a bare "Yes" means
+     // nothing — and two lines, because the identity column is ~158 px on a
