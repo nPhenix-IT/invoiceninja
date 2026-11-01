@@ -132,6 +132,41 @@ class CleanLineItemsTest extends TestCase
     }
 
     
+    public function test_manual_quote_task_preserves_hours_independently_of_total(): void
+    {
+        $item = $this->cleanItems([[
+            'type_id' => '2',
+            'product_key' => 'Main-d\'oeuvre',
+            'quantity' => 1,
+            'cost' => 1735520,
+            'task_hours' => '18.5',
+            'manual_total' => true,
+        ]])[0];
+
+        $this->assertSame('2', $item['type_id']);
+        $this->assertSame(1.0, $item['quantity']);
+        $this->assertSame(1735520.0, $item['cost']);
+        $this->assertSame(18.5, $item['task_hours']);
+        $this->assertTrue($item['manual_total']);
+
+        // A displayed hours edit must not change the amount's billing basis.
+        $item['task_hours'] = 30;
+        $this->assertSame(1735520.0, $item['cost'] * $item['quantity']);
+    }
+
+    public function test_legacy_hourly_task_has_no_manual_total_by_default(): void
+    {
+        $item = $this->cleanItems([[
+            'type_id' => '2',
+            'quantity' => 3,
+            'cost' => 10000,
+        ]])[0];
+
+        $this->assertFalse($item['manual_total']);
+        $this->assertSame(0.0, $item['task_hours']);
+        $this->assertSame(30000.0, $item['cost'] * $item['quantity']);
+    }
+
     public function test_type_id_defaults_to_1_when_missing()
     {
         $result = $this->cleanItems([[]]);
