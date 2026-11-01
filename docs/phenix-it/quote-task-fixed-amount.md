@@ -1,44 +1,102 @@
-# Montants forfaitaires pour les tâches de devis (Phenix IT)
+# Devis : heures de travail et total manuel, sans champ « Taux »
 
-## Objectif
-Dans la **création et l'édition des devis uniquement**, permettre la saisie directe d'un montant total de prestation, sans demander un nombre d'heures ni un tarif horaire. Préserver les factures, le suivi des temps et les devis historiques.
+## Demande finale (01/11/2026)
 
-## Architecture vérifiée
-Le backend de ce dépôt accepte les lignes de devis dans `line_items`. `App\\DataMapper\\InvoiceItem` contient `type_id='2'` (service/tâche), `quantity` et `cost`. Le calcul existant est effectué à partir de `quantity * cost`. Pour un forfait : `quantity=1` et `cost=montant_saisi`.
+**Uniquement dans l'éditeur des tâches des devis, pour React et Flutter Web :**
+- conserver le champ **Heures** modifiable ;
+- supprimer **uniquement le champ « Taux »** ;
+- rendre le champ **Total** modifiable directement ;
+- une modification des heures **ne change jamais** le montant total saisi ;
+- les produits, les taxes, les remises et les factures préexistantes ne changent pas.
 
-L'éditeur React de devis n'est **pas présent en sources dans ce dépôt** : `resources/views/react/index.blade.php` héberge une application React précompilée, et les sources actuelles de l'interface proviennent du dépôt public séparé `invoiceninja/ui`. Éviter tout patch direct de bundle compilé, tout remplacement de valeur DOM et toute réécriture globale de `InvoiceSum`.
+Exemple : Service = Main-d'œuvre ; Heures = 24 ; Total = 1 735 520 FCFA. Après modification à 30 heures, le montant reste 1 735 520 FCFA.
 
-## Comportement attendu
-- Interface devis / tâches : colonnes « Service », « Description », « Montant forfaitaire », taxes éventuelles et « Total ».
-- Le champ « Montant forfaitaire » est directement modifiable, en devise du devis ; la quantité interne reste à 1.
-- Tâches historiques avec `quantity != 1` : les afficher en mode horaire hérité (ou proposer une conversion **explicite** conservant le total `quantity * cost`). Ne jamais convertir silencieusement.
-- L'onglet « Tâches » ne doit plus afficher `(1 h)` pour les lignes forfaitaires.
-- Produit inchangé. Facture inchangée, sauf les valeurs attendues à la conversion du devis. Le suivi du temps dans le module Tâches reste inchangé.
-- Montant zéro autorisé ; montants invalides rejetés ; taxes et remises gérées par le moteur natif.
-- Conversion devis -> facture et rendu PDF conservent le total exact.
+## Format de données (backend Laravel)
 
-## Changement nécessaire dans le projet frontend
-Créer un **fork** de `https://github.com/invoiceninja/ui`, branché sur la version React correspondant à cette installation. Les points d'extension identifiés dans le dépôt frontend public :
-- `src/pages/quotes/create/components/CreatePage.tsx`
-- `src/pages/quotes/edit/Edit.tsx`
-- `src/pages/invoices/common/components/ProductsTable.tsx`
-- `src/pages/invoices/common/components/TasksTabLabel.tsx`
-- `src/pages/invoices/common/hooks/useTaskColumns.ts`
-- `src/pages/invoices/common/hooks/useResolveInputField.tsx`
-- `src/common/constants/product-aliases.ts`
+Les lignes des devis sont des objets JSON `line_items`, et le moteur d'Invoice Ninja utilise `quantity × cost`.
 
-**Ne pas modifier** le hook partagé de résolution des tâches globalement. Ajouter une variante spécifiquement utilisée par les deux écrans de devis, avec le rendu du montant connecté à `onLineItemPropertyChange('cost', montant, index)` et `quantity=1` à la création de la ligne. Pour les lignes historiques avec des quantités autres que 1, préserver le calcul/les champs d'origine.
+Pour une ligne de tâche à total manuel (`type_id='2'`), les deux interfaces doivent **émettre** :
 
-Le libellé de l'onglet doit compter les lignes forfaitaires ou afficher « Tâches », et non la somme des quantités en heures. Le tableau PDF peut rester « Service / Description / Total », sans afficher de colonne « Heures » ; les variables PDF sont distinctes des colonnes de l'éditeur.
+```json
+{
+  "type_id": "2",
+  "product_key": "Main-d'œuvre",
+  "notes": "Installation et configuration du réseau Wi-Fi",
+  "quantity": 1,
+  "cost": 1735520,
+  "manual_total": true,
+  "task_hours": 24
+}
+```
 
-## Vérifications avant fusion
-1. Créer un devis avec service 1 735 520 XOF, quantité interne 1, coût 1 735 520 ; enregistrer puis rouvrir. Le total reste 1 735 520 avant taxes.
-2. Ajouter deux services forfaitaires (dont un de valeur 0), et un produit ; vérifier tous les totaux.
-3. Modifier le montant, enregistrer, recharger, vérifier la persistance.
-4. Générer le PDF, envoyer le devis et convertir en facture ; vérifier les montants.
-5. Ouvrir un ancien devis à 3 heures × 10 000 : son total reste 30 000 et aucune transformation silencieuse ne survient.
-6. Tester taxes, remises, devis en plusieurs devises, écran mobile et exports.
-7. Contrôler qu'aucune interface de facturation ni de suivi d'heures n'a changé.
+La quantité de facturation technique est toujours **1**. Le prix du forfait va dans `cost`. Le nombre réel d'heures est conservé dans `task_hours`. Les champs du backend `App\\DataMapper\\InvoiceItem` assurent leur cast/persistance en JSON. Aucune migration SQL n'est nécessaire.
 
-## Statut
-**Analyse et spécification préparées**. Le backend ne nécessite aucun changement pour enregistrer un forfait sous forme d'une ligne de service à quantité 1. **La modification React, sa compilation et les tests en navigateur restent à réaliser** avec les sources de l'application frontend. Ne pas déployer cette branche comme si elle contenait déjà l'interface demandée.
+**Ne jamais** enregistrer `quantity=24, cost=1735520` : cela créerait un total erroné.
+
+### Lignes héritées
+Si `manual_total` est absent/faux, afficher les heures historiques depuis `quantity`, et le total historique depuis `quantity × cost`. Dès que l'utilisateur édite ce poste via un éditeur de devis modifié, le convertir en `manual_total=true, quantity=1, cost=ancien_total, task_hours=heures` en préservant le total. Les factures à tarification horaire ne doivent pas être converties.
+
+Le PDF doit afficher les vraies heures (`task_hours` pour les lignes manuelles, `quantity` pour les anciennes). Le calcul du sous-total, des taxes et du total reste natif et utilise la quantité technique de 1 pour un forfait. Pour ne plus afficher « Taux » dans le **PDF**, il faut aussi retirer la colonne « Taux » du design des tâches (`task_columns`) de l'entreprise.
+
+## Fichiers backend effectivement modifiés dans cette branche
+
+- `app/DataMapper/InvoiceItem.php` : `task_hours` et `manual_total` (avec casts).
+- `app/Utils/Traits/MakesInvoiceValues.php` : valeur `$task.hours` provenant des heures réelles.
+- `app/Utils/HtmlEngine.php` : somme des heures PDF correcte.
+- `tests/Unit/CleanLineItemsTest.php` : cas manuel + cas historique.
+
+## Correctifs de sources frontend préparés et validés au niveau des hunks
+
+Les sources des deux interfaces ne font **pas** partie du fork Laravel `nPhenix-IT/invoiceninja`, et le compte lié n'a pas de droit d'écriture sur les dépôts publics amont. Les correctifs source sont donc conservés sous forme de patches, **pas encore intégrés ni compilés** :
+
+- React : `integrations/react/quote-task-hours-manual-total.patch` (7 fichiers).
+- Flutter Web et mobile : `integrations/flutter/quote-task-hours-manual-total-part1.patch` (7 fichiers).
+- Flutter tableau desktop : `integrations/flutter/quote-task-hours-manual-total-desktop.patch` (1 fichier).
+
+Les 15 fichiers des patches ont été rapprochés des sources amont : tous les hunks correspondent au texte publié dans les sources interrogées lors de l'analyse. **Cela ne constitue pas une compilation, un test visuel ou un test de fonctionnement.**
+
+### Application React
+
+Dans un checkout séparé de `invoiceninja/ui` correspondant à la version utilisée :
+
+```bash
+git switch -c feature/quote-manual-task-total
+git apply --check /chemin/vers/invoiceninja/integrations/react/quote-task-hours-manual-total.patch
+git apply /chemin/vers/invoiceninja/integrations/react/quote-task-hours-manual-total.patch
+npm ci
+npm run build
+```
+
+### Application Flutter
+
+Dans un checkout séparé de `invoiceninja/flutter` correspondant à la version utilisée :
+
+```bash
+git switch -c feature/quote-manual-task-total
+git apply --check /chemin/vers/invoiceninja/integrations/flutter/quote-task-hours-manual-total-part1.patch
+git apply --check /chemin/vers/invoiceninja/integrations/flutter/quote-task-hours-manual-total-desktop.patch
+git apply /chemin/vers/invoiceninja/integrations/flutter/quote-task-hours-manual-total-part1.patch
+git apply /chemin/vers/invoiceninja/integrations/flutter/quote-task-hours-manual-total-desktop.patch
+dart run build_runner build --delete-conflicting-outputs
+flutter analyze
+flutter test
+flutter build web --release
+```
+
+Le remplacement des assets `public/main.dart.js` et des autres assets Flutter dans le backend Laravel nécessite une procédure de déploiement versionnée et un test sur un site de préproduction. Ne jamais modifier directement le JavaScript Flutter compilé ni remplacer des assets sur le serveur de production sans validation.
+
+## Critères d'acceptation
+
+1. Les éditeurs **React et Flutter Web** affichent « Service », « Description », « Heures », « Total » ; ils n'affichent plus « Taux » dans les devis.
+2. Devis : 24 heures / 1 735 520 FCFA ; après modification à 30 heures, toujours 1 735 520 FCFA.
+3. Sauvegarde, réouverture, duplication et révision préservent la valeur des heures, le montant et le type de service.
+4. TVA et remises par ligne et au devis, en taxes exclusives et inclusives, restent exactes.
+5. PDF, emails, portail client et conversion devis vers facture conservent les montants ; PDF affiche les vraies heures.
+6. Un ancien devis de 3 heures × 10 000 FCFA continue à totaliser 30 000 FCFA ; aucune conversion silencieuse sans édition.
+7. Les factures existantes, le suivi de tâches et les produits ne sont pas affectés.
+8. Tests mobile, desktop et visuels, tests de non-régression, tests de devise XOF et séparateurs.
+9. Réaliser les tests sur une base isolée (ne pas modifier la vraie production).
+
+## État de cette Pull Request
+
+Backend adapté et correctifs sources des deux interfaces fournis. **Aucune application frontend n'a été recompilée et les tests d'intégration/visuels n'ont pas été exécutés.** Pull Request en brouillon : ne pas fusionner tant que ce n'est pas validé.
